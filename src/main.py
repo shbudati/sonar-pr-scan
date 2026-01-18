@@ -35,7 +35,34 @@ def run_sonar_scanner(host, token, project_key, organization=None, project_name=
         sys.exit(result.returncode)
     print("SonarScanner finished successfully.")
 
-def get_sonar_issues(host, token, project_key, pr_number=None):
+def get_sonar_data(host, token, project_key, pr_number=None, organization=None):
+    """
+    Fetches all necessary data from SonarQube, attempting PR mode first.
+    Returns a tuple: (issues, hotspots, metrics, qg_status, used_pr_mode)
+    """
+    used_pr_mode = False
+    
+    # 1. Try fetching issues in PR mode
+    issues = []
+    try:
+        issues = get_sonar_issues(host, token, project_key, pr_number, organization)
+        used_pr_mode = True if pr_number else False
+        print(f"Fetched {len(issues)} issues in {'PR' if used_pr_mode else 'Global'} mode.")
+    except Exception as e:
+        print(f"PR mode issue fetch failed, falling back to global: {e}")
+        issues = get_sonar_issues(host, token, project_key, None, organization)
+        used_pr_mode = False
+
+    # 2. Fetch others using the same mode (fallback if needed)
+    fetch_pr = pr_number if used_pr_mode else None
+    
+    hotspots = get_sonar_hotspots(host, token, project_key, fetch_pr, organization)
+    metrics = get_coverage_metrics(host, token, project_key, fetch_pr, organization)
+    qg_status = get_quality_gate_status(host, token, project_key, fetch_pr, organization)
+    
+    return issues, hotspots, metrics, qg_status, used_pr_mode
+
+def get_sonar_issues(host, token, project_key, pr_number=None, organization=None):
     """Fetches open issues from SonarQube."""
     url = f"{host}/api/issues/search"
     params = {
@@ -43,14 +70,14 @@ def get_sonar_issues(host, token, project_key, pr_number=None):
         "resolved": "false",
         "ps": 500 # Page size
     }
-    if pr_number:
-        params["pullRequest"] = pr_number
+    if pr_number: params["pullRequest"] = pr_number
+    if organization: params["organization"] = organization
         
     response = requests.get(url, params=params, auth=(token, ""))
     response.raise_for_status()
     return response.json().get("issues", [])
 
-def get_sonar_hotspots(host, token, project_key, pr_number=None):
+def get_sonar_hotspots(host, token, project_key, pr_number=None, organization=None):
     """Fetches security hotspots from SonarQube."""
     url = f"{host}/api/hotspots/search"
     # Note: /api/hotspots/search uses 'project', while others use 'projectKey' or 'componentKeys'
@@ -58,28 +85,27 @@ def get_sonar_hotspots(host, token, project_key, pr_number=None):
         "project": project_key,
         "ps": 500
     }
-    if pr_number:
-        params["pullRequest"] = pr_number
+    if pr_number: params["pullRequest"] = pr_number
+    if organization: params["organization"] = organization
         
     try:
         response = requests.get(url, params=params, auth=(token, ""))
         response.raise_for_status()
         hotspots = response.json().get("hotspots", [])
-        print(f"Fetched {len(hotspots)} hotspots from SonarQube.")
         return hotspots
     except Exception as e:
         print(f"Warning: Could not fetch security hotspots: {e}")
         return []
 
-def get_coverage_metrics(host, token, project_key, pr_number=None):
+def get_coverage_metrics(host, token, project_key, pr_number=None, organization=None):
     """Fetches coverage metrics."""
     url = f"{host}/api/measures/component"
     params = {
         "component": project_key,
         "metricKeys": "coverage,new_coverage"
     }
-    if pr_number:
-        params["pullRequest"] = pr_number
+    if pr_number: params["pullRequest"] = pr_number
+    if organization: params["organization"] = organization
         
     metrics = {}
     try:
@@ -93,7 +119,7 @@ def get_coverage_metrics(host, token, project_key, pr_number=None):
         
     return metrics
 
-def get_file_coverage(host, token, project_key, changed_files, pr_number=None):
+def get_file_coverage(host, token, project_key, changed_files, pr_number=None, organization=None):
     """Fetches coverage for changed files."""
     url = f"{host}/api/measures/component_tree"
     params = {
@@ -102,8 +128,8 @@ def get_file_coverage(host, token, project_key, changed_files, pr_number=None):
         "qualifiers": "FIL",
         "ps": 500
     }
-    if pr_number:
-        params["pullRequest"] = pr_number
+    if pr_number: params["pullRequest"] = pr_number
+    if organization: params["organization"] = organization
         
     file_coverage = {}
     try:
@@ -121,12 +147,12 @@ def get_file_coverage(host, token, project_key, changed_files, pr_number=None):
     
     return file_coverage
 
-def get_quality_gate_status(host, token, project_key, pr_number=None):
+def get_quality_gate_status(host, token, project_key, pr_number=None, organization=None):
     """Fetches the quality gate status."""
     url = f"{host}/api/qualitygates/project_status"
     params = {"projectKey": project_key}
-    if pr_number:
-        params["pullRequest"] = pr_number
+    if pr_number: params["pullRequest"] = pr_number
+    if organization: params["organization"] = organization
         
     try:
         response = requests.get(url, params=params, auth=(token, ""))
@@ -137,7 +163,7 @@ def get_quality_gate_status(host, token, project_key, pr_number=None):
         print(f"Warning: Could not fetch quality gate status: {e}")
         return "UNKNOWN"
 
-def format_comment(issues, hotspots, changed_lines, metrics, file_coverage, qg_status, host, project_key, pr_number=None):
+def format_comment(issues, hotspots, changed_lines, metrics, file_coverage, qg_status, host, project_key, pr_number=None, is_pr_mode=False):
     """Formats the findings into a Markdown comment."""
     relevant_issues = []
     for issue in issues:
@@ -146,21 +172,22 @@ def format_comment(issues, hotspots, changed_lines, metrics, file_coverage, qg_s
         file_path = component.split(":", 1)[-1] if ":" in component else component
         line = issue.get("line")
         
-        # If we have line info, filter by changed lines. If not (e.g. file-level issue), include if file changed.
-        if file_path in changed_lines and (line is None or line in changed_lines[file_path]):
-            issue_key = issue.get("key")
-            # Build link with pullRequest parameter for better context in SonarQube Cloud/Enterprise
-            link = f"{host}/project/issues?id={project_key}&issues={issue_key}&open={issue_key}"
-            if pr_number:
-                link += f"&pullRequest={pr_number}"
+        # Filtering logic:
+        # If is_pr_mode: Trust SonarQube's filter, just check if the file is in our diff.
+        # If NOT is_pr_mode (Community Edition): Apply strict line-level filtering.
+        if file_path in changed_lines:
+            if is_pr_mode or (line is None or line in changed_lines[file_path]):
+                issue_key = issue.get("key")
+                link = f"{host}/project/issues?id={project_key}&issues={issue_key}&open={issue_key}"
+                if pr_number and is_pr_mode: link += f"&pullRequest={pr_number}"
                 
-            relevant_issues.append({
-                "file": file_path,
-                "line": line or "N/A",
-                "message": issue.get("message"),
-                "severity": issue.get("severity"),
-                "link": link
-            })
+                relevant_issues.append({
+                    "file": file_path,
+                    "line": line or "N/A",
+                    "message": issue.get("message"),
+                    "severity": issue.get("severity"),
+                    "link": link
+                })
 
     relevant_hotspots = []
     for hs in hotspots:
@@ -168,27 +195,25 @@ def format_comment(issues, hotspots, changed_lines, metrics, file_coverage, qg_s
         file_path = component.split(":", 1)[-1] if ":" in component else component
         line = hs.get("line")
         
-        # Relaxed filtering for hotspots: if the file is modified, show it.
-        # This is because hotspots often cover a range or might not align with 'added' lines perfectly.
         if file_path in changed_lines:
-            hs_key = hs.get("key")
-            link = f"{host}/security_hotspots?id={project_key}&hotspots={hs_key}"
-            if pr_number:
-                link += f"&pullRequest={pr_number}"
+            if is_pr_mode or (line is None or line in changed_lines[file_path]):
+                hs_key = hs.get("key")
+                link = f"{host}/security_hotspots?id={project_key}&hotspots={hs_key}"
+                if pr_number and is_pr_mode: link += f"&pullRequest={pr_number}"
                 
-            relevant_hotspots.append({
-                "file": file_path,
-                "line": line or "N/A",
-                "message": hs.get("message"),
-                "status": hs.get("status"),
-                "link": link
-            })
+                relevant_hotspots.append({
+                    "file": file_path,
+                    "line": line or "N/A",
+                    "message": hs.get("message"),
+                    "status": hs.get("status"),
+                    "link": link
+                })
             
     # Start Building Comment
     comment = "<!-- sonarppr-scan -->\n"
     comment += "### 🔍 SonarQube Analysis (New Code)\n"
     
-    if pr_number:
+    if pr_number and is_pr_mode:
         analysis_link = f"{host}/dashboard?id={project_key}&pullRequest={pr_number}"
         comment += f"[See analysis details on SonarQube]({analysis_link})\n\n"
     else:
@@ -278,15 +303,13 @@ def main():
     
     # 3. Process Results
     try:
-        issues = get_sonar_issues(sonar_host, sonar_token, project_key, pr_number)
-        hotspots = get_sonar_hotspots(sonar_host, sonar_token, project_key, pr_number)
-        metrics = get_coverage_metrics(sonar_host, sonar_token, project_key, pr_number)
-        qg_status = get_quality_gate_status(sonar_host, sonar_token, project_key, pr_number)
+        issues, hotspots, metrics, qg_status, is_pr_mode = get_sonar_data(sonar_host, sonar_token, project_key, pr_number, organization)
         
         changed_file_paths = list(changed_lines.keys())
-        file_coverage = get_file_coverage(sonar_host, sonar_token, project_key, changed_file_paths, pr_number)
+        fetch_pr = pr_number if is_pr_mode else None
+        file_coverage = get_file_coverage(sonar_host, sonar_token, project_key, changed_file_paths, fetch_pr, organization)
         
-        comment_body = format_comment(issues, hotspots, changed_lines, metrics, file_coverage, qg_status, sonar_host, project_key, pr_number)
+        comment_body = format_comment(issues, hotspots, changed_lines, metrics, file_coverage, qg_status, sonar_host, project_key, pr_number, is_pr_mode)
         
         if comment_body:
             print("Posting comment to PR...")
