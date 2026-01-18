@@ -85,6 +85,8 @@ def get_sonar_issues(host, token, project_key, pr_number=None, organization=None
     if organization: params["organization"] = organization
         
     response = requests.get(url, params=params, auth=(token, ""))
+    if response.status_code >= 400:
+        print(f"Error fetching issues: {response.status_code} - {response.text}")
     response.raise_for_status()
     return response.json().get("issues", [])
 
@@ -101,6 +103,8 @@ def get_sonar_hotspots(host, token, project_key, pr_number=None, organization=No
         
     try:
         response = requests.get(url, params=params, auth=(token, ""))
+        if response.status_code >= 400:
+            print(f"Error fetching hotspots: {response.status_code} - {response.text}")
         response.raise_for_status()
         hotspots = response.json().get("hotspots", [])
         print(f"Fetched {len(hotspots)} hotspots.")
@@ -122,6 +126,8 @@ def get_coverage_metrics(host, token, project_key, pr_number=None, organization=
     metrics = {}
     try:
         response = requests.get(url, params=params, auth=(token, ""))
+        if response.status_code >= 400:
+            print(f"Error fetching metrics: {response.status_code} - {response.text}")
         response.raise_for_status()
         measures = response.json().get("component", {}).get("measures", [])
         for m in measures:
@@ -146,6 +152,8 @@ def get_file_coverage(host, token, project_key, changed_files, pr_number=None, o
     file_coverage = {}
     try:
         response = requests.get(url, params=params, auth=(token, ""))
+        if response.status_code >= 400:
+            print(f"Error fetching file coverage: {response.status_code} - {response.text}")
         response.raise_for_status()
         components = response.json().get("components", [])
         for comp in components:
@@ -168,6 +176,8 @@ def get_quality_gate_status(host, token, project_key, pr_number=None, organizati
         
     try:
         response = requests.get(url, params=params, auth=(token, ""))
+        if response.status_code >= 400:
+            print(f"Error fetching quality gate status: {response.status_code} - {response.text}")
         response.raise_for_status()
         return response.json().get("projectStatus", {}).get("status", "UNKNOWN")
     except Exception as e:
