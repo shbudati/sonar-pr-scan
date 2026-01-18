@@ -21,8 +21,7 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy source
-COPY src/ /app/src/
+COPY src/ /app/
 
 # Entrypoint
-COPY src/main.py /app/main.py
 ENTRYPOINT ["python", "/app/main.py"]
