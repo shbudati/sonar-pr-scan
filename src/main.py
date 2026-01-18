@@ -5,7 +5,7 @@ import requests
 from github import Github
 from diff_parser import get_pr_diff, parse_changed_lines
 
-def run_sonar_scanner(host, token, project_key, project_name=None, exclusions=None):
+def run_sonar_scanner(host, token, project_key, organization=None, project_name=None, exclusions=None):
     """Runs the sonar-scanner CLI."""
     print("Running SonarScanner...")
     # Architecture Note:
@@ -19,6 +19,8 @@ def run_sonar_scanner(host, token, project_key, project_name=None, exclusions=No
         f"-Dsonar.projectKey={project_key}",
         "-Dsonar.scm.provider=test" # Disable SCM sensor to avoid issues in some docker envs if .git is incomplete
     ]
+    if organization:
+        cmd.append(f"-Dsonar.organization={organization}")
     if project_name:
         cmd.append(f"-Dsonar.projectName={project_name}")
     if exclusions:
@@ -187,6 +189,7 @@ def main():
     sonar_token = os.getenv("INPUT_SONAR-TOKEN")
     project_key = os.getenv("INPUT_PROJECT-KEY")
     project_name = os.getenv("INPUT_PROJECT-NAME")
+    organization = os.getenv("INPUT_SONAR-ORGANIZATION")
     exclusions = os.getenv("INPUT_EXCLUSIONS")
     github_token = os.getenv("INPUT_GITHUB-TOKEN")
     
@@ -232,7 +235,7 @@ def main():
         sys.exit(1)
         
     # 2. Run Analysis
-    run_sonar_scanner(sonar_host, sonar_token, project_key, project_name, exclusions)
+    run_sonar_scanner(sonar_host, sonar_token, project_key, organization, project_name, exclusions)
     
     # 3. Process Results
     try:
