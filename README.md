@@ -44,12 +44,14 @@ Since this action uses the standard `sonar-scanner` to upload code to **your** S
 See `action.yml` for input definitions.
 
 ```yaml
-uses: ./path/to/sonar-action
+uses: shbudati/sonar-pr-scan@main
 with:
   sonar-host-url: ${{ secrets.SONAR_HOST_URL }}
   sonar-token: ${{ secrets.SONAR_TOKEN }}
   project-key: "my-project"
   github-token: ${{ secrets.GITHUB_TOKEN }}
+  # Optional: defaults to 'community' (runs Global API + Manual Diff Filtering)
+  # sonar-edition: 'cloud' # set to 'cloud', 'developer', or 'enterprise' to use Sonar's PR API
 ```
 
 ## ❓ Why Docker?

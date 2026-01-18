@@ -35,25 +35,36 @@ def run_sonar_scanner(host, token, project_key, organization=None, project_name=
         sys.exit(result.returncode)
     print("SonarScanner finished successfully.")
 
-def get_sonar_data(host, token, project_key, pr_number=None, organization=None):
+def get_sonar_data(host, token, project_key, pr_number=None, organization=None, edition='community'):
     """
-    Fetches all necessary data from SonarQube, attempting PR mode first.
+    Fetches all necessary data from SonarQube.
+    If edition is 'community', it goes straight to Global mode.
+    Otherwise, it attempts PR mode first.
     Returns a tuple: (issues, hotspots, metrics, qg_status, used_pr_mode)
     """
     used_pr_mode = False
     
-    # 1. Try fetching issues in PR mode
+    # 1. Determine Fetch Strategy
+    attempt_pr_mode = edition.lower() in ['cloud', 'developer', 'enterprise'] and pr_number
+    
     issues = []
-    try:
-        issues = get_sonar_issues(host, token, project_key, pr_number, organization)
-        used_pr_mode = True if pr_number else False
-        print(f"Fetched {len(issues)} issues in {'PR' if used_pr_mode else 'Global'} mode.")
-    except Exception as e:
-        print(f"PR mode issue fetch failed, falling back to global: {e}")
+    if attempt_pr_mode:
+        try:
+            print(f"Attempting PR mode fetch for edition: {edition}")
+            issues = get_sonar_issues(host, token, project_key, pr_number, organization)
+            used_pr_mode = True
+        except Exception as e:
+            print(f"PR mode fetch failed, falling back to global: {e}")
+            issues = get_sonar_issues(host, token, project_key, None, organization)
+            used_pr_mode = False
+    else:
+        print(f"Using Global mode fetch (Edition: {edition})")
         issues = get_sonar_issues(host, token, project_key, None, organization)
         used_pr_mode = False
 
-    # 2. Fetch others using the same mode (fallback if needed)
+    print(f"Fetched {len(issues)} issues in {'PR' if used_pr_mode else 'Global'} mode.")
+
+    # 2. Fetch others using the same mode
     fetch_pr = pr_number if used_pr_mode else None
     
     hotspots = get_sonar_hotspots(host, token, project_key, fetch_pr, organization)
@@ -166,6 +177,8 @@ def get_quality_gate_status(host, token, project_key, pr_number=None, organizati
 def format_comment(issues, hotspots, changed_lines, metrics, file_coverage, qg_status, host, project_key, pr_number=None, is_pr_mode=False):
     """Formats the findings into a Markdown comment."""
     relevant_issues = []
+    print(f"Processing {len(issues)} issues and {len(hotspots)} hotspots. is_pr_mode={is_pr_mode}")
+    
     for issue in issues:
         component = issue.get("component", "")
         # Robust path extraction (strip project key if present)
@@ -173,21 +186,28 @@ def format_comment(issues, hotspots, changed_lines, metrics, file_coverage, qg_s
         line = issue.get("line")
         
         # Filtering logic:
-        # If is_pr_mode: Trust SonarQube's filter, just check if the file is in our diff.
-        # If NOT is_pr_mode (Community Edition): Apply strict line-level filtering.
-        if file_path in changed_lines:
-            if is_pr_mode or (line is None or line in changed_lines[file_path]):
-                issue_key = issue.get("key")
-                link = f"{host}/project/issues?id={project_key}&issues={issue_key}&open={issue_key}"
-                if pr_number and is_pr_mode: link += f"&pullRequest={pr_number}"
+        # If is_pr_mode: Trust SonarQube's filter COMPLETELY. 
+        # SonarQube already only returns findings for "New Code" when pullRequest param is used.
+        if is_pr_mode:
+            include = True
+        else:
+            # Global Mode (Community Edition): Apply strict line-level filtering.
+            include = file_path in changed_lines and (line is None or line in changed_lines[file_path])
+            
+        if include:
+            issue_key = issue.get("key")
+            link = f"{host}/project/issues?id={project_key}&issues={issue_key}&open={issue_key}"
+            if pr_number and is_pr_mode: link += f"&pullRequest={pr_number}"
                 
-                relevant_issues.append({
-                    "file": file_path,
-                    "line": line or "N/A",
-                    "message": issue.get("message"),
-                    "severity": issue.get("severity"),
-                    "link": link
-                })
+            relevant_issues.append({
+                "file": file_path,
+                "line": line or "N/A",
+                "message": issue.get("message"),
+                "severity": issue.get("severity"),
+                "link": link
+            })
+        else:
+            print(f"Filtered out issue: {file_path}:{line}")
 
     relevant_hotspots = []
     for hs in hotspots:
@@ -195,19 +215,25 @@ def format_comment(issues, hotspots, changed_lines, metrics, file_coverage, qg_s
         file_path = component.split(":", 1)[-1] if ":" in component else component
         line = hs.get("line")
         
-        if file_path in changed_lines:
-            if is_pr_mode or (line is None or line in changed_lines[file_path]):
-                hs_key = hs.get("key")
-                link = f"{host}/security_hotspots?id={project_key}&hotspots={hs_key}"
-                if pr_number and is_pr_mode: link += f"&pullRequest={pr_number}"
+        if is_pr_mode:
+            include = True
+        else:
+            include = file_path in changed_lines and (line is None or line in changed_lines[file_path])
+            
+        if include:
+            hs_key = hs.get("key")
+            link = f"{host}/security_hotspots?id={project_key}&hotspots={hs_key}"
+            if pr_number and is_pr_mode: link += f"&pullRequest={pr_number}"
                 
-                relevant_hotspots.append({
-                    "file": file_path,
-                    "line": line or "N/A",
-                    "message": hs.get("message"),
-                    "status": hs.get("status"),
-                    "link": link
-                })
+            relevant_hotspots.append({
+                "file": file_path,
+                "line": line or "N/A",
+                "message": hs.get("message"),
+                "status": hs.get("status"),
+                "link": link
+            })
+        else:
+            print(f"Filtered out hotspot: {file_path}:{line}")
             
     # Start Building Comment
     comment = "<!-- sonarppr-scan -->\n"
@@ -245,6 +271,7 @@ def format_comment(issues, hotspots, changed_lines, metrics, file_coverage, qg_s
         comment += "\n"
 
     # Issues Section 
+    print(f"Reporting {len(relevant_issues)} relevant issues and {len(relevant_hotspots)} relevant hotspots.")
     if not relevant_issues and not relevant_hotspots:
         comment += "✅ No issues found in the new code."
     else:
@@ -277,6 +304,7 @@ def main():
     project_key = os.getenv("INPUT_PROJECT-KEY")
     project_name = os.getenv("INPUT_PROJECT-NAME")
     organization = os.getenv("INPUT_SONAR-ORGANIZATION")
+    edition = os.getenv("INPUT_SONAR-EDITION", "community")
     exclusions = os.getenv("INPUT_EXCLUSIONS")
     binaries = os.getenv("INPUT_BINARIES")
     github_token = os.getenv("INPUT_GITHUB-TOKEN")
@@ -303,7 +331,7 @@ def main():
     
     # 3. Process Results
     try:
-        issues, hotspots, metrics, qg_status, is_pr_mode = get_sonar_data(sonar_host, sonar_token, project_key, pr_number, organization)
+        issues, hotspots, metrics, qg_status, is_pr_mode = get_sonar_data(sonar_host, sonar_token, project_key, pr_number, organization, edition)
         
         changed_file_paths = list(changed_lines.keys())
         fetch_pr = pr_number if is_pr_mode else None

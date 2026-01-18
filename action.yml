@@ -15,7 +15,11 @@ inputs:
     required: false
   sonar-organization:
     description: 'SonarCloud organization identifier'
-    required: true
+    required: false
+  sonar-edition:
+    description: 'SonarQube edition (community, cloud, developer, enterprise)'
+    required: false
+    default: 'community'
   github-token:
     description: 'GitHub Token to post comments'
     required: true
