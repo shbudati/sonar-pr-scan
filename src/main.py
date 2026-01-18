@@ -194,8 +194,15 @@ def main():
     # Actually, simpler: The Action runs in the context of the PR.
     
     # Verify environment
-    if not (sonar_host and sonar_token and project_key and github_token and repo):
-        print("Missing required inputs.")
+    missing = []
+    if not sonar_host: missing.append("sonar-host-url")
+    if not sonar_token: missing.append("sonar-token")
+    if not project_key: missing.append("project-key")
+    if not github_token: missing.append("github-token")
+    if not repo: missing.append("GITHUB_REPOSITORY")
+    
+    if missing:
+        print(f"Missing required inputs: {', '.join(missing)}")
         sys.exit(1)
 
     # 1. Get PR changes
