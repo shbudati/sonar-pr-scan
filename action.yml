@@ -7,6 +7,7 @@ inputs:
   sonar-token:
     description: 'Authentication token for SonarQube'
     required: true
+  project-key:
     description: 'The key of the project in SonarQube'
     required: true
   project-name:
