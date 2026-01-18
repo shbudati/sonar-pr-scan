@@ -13,9 +13,9 @@ inputs:
   project-name:
     description: 'The name of the project in SonarQube'
     required: false
-  exclusions:
-    description: 'Files to exclude from the scan'
-    required: false
+  sonar-organization:
+    description: 'SonarCloud organization identifier'
+    required: true
   github-token:
     description: 'GitHub Token to post comments'
     required: true
