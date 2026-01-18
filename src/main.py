@@ -127,7 +127,8 @@ def format_comment(issues, changed_lines, metrics, file_coverage, qg_status, hos
             })
             
     # Start Building Comment
-    comment = "### 🔍 SonarQube Analysis (New Code)\n\n"
+    comment = "<!-- sonarppr-scan -->\n"
+    comment += "### 🔍 SonarQube Analysis (New Code)\n\n"
     
     # Health / Quality Gate
     status_icons = {
@@ -159,30 +160,28 @@ def format_comment(issues, changed_lines, metrics, file_coverage, qg_status, hos
 
     # Issues Section 
     if not relevant_issues:
-        if not metrics and not file_coverage:
-             # Nothing to report
-            return None 
-        if not relevant_issues:
-            comment += "✅ No issues found in the new code."
-            return comment
+        comment += "✅ No issues found in the new code."
+    else:
+        comment += "#### 🐛 Issues\n"
+        comment += "| Severity | File | Line | Message |\n"
+        comment += "|----------|------|------|---------|\n"
         
-    comment += "#### 🐛 Issues\n"
-    comment += "| Severity | File | Line | Message |\n"
-    comment += "|----------|------|------|---------|\n"
-    
-    icons = {
-        "BLOCKER": "🚫",
-        "CRITICAL": "🔴",
-        "MAJOR": "jg",
-        "MINOR": "🟢",
-        "INFO": "ℹ️"
-    }
-    
-    for i in relevant_issues:
-        icon = icons.get(i['severity'], "")
-        message_link = f"[{i['message']}]({i['link']})"
-        comment += f"| {icon} {i['severity']} | `{i['file']}` | {i['line']} | {message_link} |\n"
+        icons = {
+            "BLOCKER": "🚫",
+            "CRITICAL": "🔴",
+            "MAJOR": "jg",
+            "MINOR": "🟢",
+            "INFO": "ℹ️"
+        }
         
+        for i in relevant_issues:
+            icon = icons.get(i['severity'], "")
+            message_link = f"[{i['message']}]({i['link']})"
+            comment += f"| {icon} {i['severity']} | `{i['file']}` | {i['line']} | {message_link} |\n"
+        
+    comment += "\n---\n"
+    comment += "_Reported by sonarppr-scan_"
+    
     return comment
 
 def main():
