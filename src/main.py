@@ -5,7 +5,7 @@ import requests
 from github import Github
 from diff_parser import get_pr_diff, parse_changed_lines
 
-def run_sonar_scanner(host, token, project_key, organization=None, project_name=None, exclusions=None):
+def run_sonar_scanner(host, token, project_key, organization=None, project_name=None, exclusions=None, binaries=None):
     """Runs the sonar-scanner CLI."""
     print("Running SonarScanner...")
     # Architecture Note:
@@ -25,6 +25,8 @@ def run_sonar_scanner(host, token, project_key, organization=None, project_name=
         cmd.append(f"-Dsonar.projectName={project_name}")
     if exclusions:
         cmd.append(f"-Dsonar.exclusions={exclusions}")
+    if binaries:
+        cmd.append(f"-Dsonar.java.binaries={binaries}")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print("SonarScanner failed:")
@@ -191,6 +193,7 @@ def main():
     project_name = os.getenv("INPUT_PROJECT-NAME")
     organization = os.getenv("INPUT_SONAR-ORGANIZATION")
     exclusions = os.getenv("INPUT_EXCLUSIONS")
+    binaries = os.getenv("INPUT_BINARIES")
     github_token = os.getenv("INPUT_GITHUB-TOKEN")
     
     # GitHub Event Info
@@ -235,7 +238,7 @@ def main():
         sys.exit(1)
         
     # 2. Run Analysis
-    run_sonar_scanner(sonar_host, sonar_token, project_key, organization, project_name, exclusions)
+    run_sonar_scanner(sonar_host, sonar_token, project_key, organization, project_name, exclusions, binaries)
     
     # 3. Process Results
     try:

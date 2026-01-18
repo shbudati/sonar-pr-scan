@@ -19,6 +19,9 @@ inputs:
   github-token:
     description: 'GitHub Token to post comments'
     required: true
+  binaries:
+    description: 'Path to compiled Java classes (required for Java analysis)'
+    required: false
 runs:
   using: 'docker'
   image: 'Dockerfile'
