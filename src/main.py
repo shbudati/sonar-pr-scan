@@ -38,19 +38,19 @@ def run_sonar_scanner(host, token, project_key, organization=None, project_name=
 def get_sonar_data(host, token, project_key, pr_number=None, organization=None, edition='community'):
     """
     Fetches all necessary data from SonarQube.
-    If edition is 'community', it goes straight to Global mode.
+    If edition is 'community', it uses Global mode (manual line-filtering).
     Otherwise, it attempts PR mode first.
     Returns a tuple: (issues, hotspots, metrics, qg_status, used_pr_mode)
     """
     used_pr_mode = False
     
-    # 1. Determine Fetch Strategy
+    # Determine Fetch Strategy
     attempt_pr_mode = edition.lower() in ['cloud', 'developer', 'enterprise'] and pr_number
     
     issues = []
     if attempt_pr_mode:
         try:
-            print(f"Attempting PR mode fetch for edition: {edition}")
+            print(f"Attempting PR mode fetch (Edition: {edition})")
             issues = get_sonar_issues(host, token, project_key, pr_number, organization)
             used_pr_mode = True
         except Exception as e:
@@ -58,13 +58,13 @@ def get_sonar_data(host, token, project_key, pr_number=None, organization=None, 
             issues = get_sonar_issues(host, token, project_key, None, organization)
             used_pr_mode = False
     else:
-        print(f"Using Global mode fetch (Edition: {edition})")
+        print(f"Using Community Edition mode (Global API + Manual Filtering)")
         issues = get_sonar_issues(host, token, project_key, None, organization)
         used_pr_mode = False
 
     print(f"Fetched {len(issues)} issues in {'PR' if used_pr_mode else 'Global'} mode.")
 
-    # 2. Fetch others using the same mode
+    # Fetch others using the same mode
     fetch_pr = pr_number if used_pr_mode else None
     
     hotspots = get_sonar_hotspots(host, token, project_key, fetch_pr, organization)
@@ -103,9 +103,10 @@ def get_sonar_hotspots(host, token, project_key, pr_number=None, organization=No
         response = requests.get(url, params=params, auth=(token, ""))
         response.raise_for_status()
         hotspots = response.json().get("hotspots", [])
+        print(f"Fetched {len(hotspots)} hotspots.")
         return hotspots
     except Exception as e:
-        print(f"Warning: Could not fetch security hotspots: {e}")
+        print(f"Warning: Could not fetch hotspots: {e}")
         return []
 
 def get_coverage_metrics(host, token, project_key, pr_number=None, organization=None):
@@ -126,7 +127,7 @@ def get_coverage_metrics(host, token, project_key, pr_number=None, organization=
         for m in measures:
             metrics[m["metric"]] = m["value"]
     except Exception as e:
-        print(f"Warning: Could not fetch coverage metrics: {e}")
+        print(f"Warning: Could not fetch metrics: {e}")
         
     return metrics
 
@@ -168,8 +169,7 @@ def get_quality_gate_status(host, token, project_key, pr_number=None, organizati
     try:
         response = requests.get(url, params=params, auth=(token, ""))
         response.raise_for_status()
-        status = response.json().get("projectStatus", {}).get("status", "UNKNOWN")
-        return status
+        return response.json().get("projectStatus", {}).get("status", "UNKNOWN")
     except Exception as e:
         print(f"Warning: Could not fetch quality gate status: {e}")
         return "UNKNOWN"
@@ -191,7 +191,9 @@ def format_comment(issues, hotspots, changed_lines, metrics, file_coverage, qg_s
         if is_pr_mode:
             include = True
         else:
-            # Global Mode (Community Edition): Apply strict line-level filtering.
+            # Global Mode (Community Edition): Manual Filtering
+            # Always include if file is changed and it's a file-level issue (line is None)
+            # OR if line strictly matches the diff
             include = file_path in changed_lines and (line is None or line in changed_lines[file_path])
             
         if include:
@@ -207,7 +209,8 @@ def format_comment(issues, hotspots, changed_lines, metrics, file_coverage, qg_s
                 "link": link
             })
         else:
-            print(f"Filtered out issue: {file_path}:{line}")
+            # Silent filtering for issues (too many logs usually)
+            pass
 
     relevant_hotspots = []
     for hs in hotspots:
@@ -218,7 +221,10 @@ def format_comment(issues, hotspots, changed_lines, metrics, file_coverage, qg_s
         if is_pr_mode:
             include = True
         else:
-            include = file_path in changed_lines and (line is None or line in changed_lines[file_path])
+            # Global Mode (Community Edition): ROBUST Filtering for Hotspots
+            # Hotspots are critical. We include them if the FILE is modified, 
+            # as Sonar's line reporting for hotspots can be imprecise or outside the direct diff chunk.
+            include = file_path in changed_lines
             
         if include:
             hs_key = hs.get("key")
@@ -233,7 +239,7 @@ def format_comment(issues, hotspots, changed_lines, metrics, file_coverage, qg_s
                 "link": link
             })
         else:
-            print(f"Filtered out hotspot: {file_path}:{line}")
+            print(f"Filtered out hotspot in unchanged file: {file_path}")
             
     # Start Building Comment
     comment = "<!-- sonarppr-scan -->\n"
