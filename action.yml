@@ -7,9 +7,14 @@ inputs:
   sonar-token:
     description: 'Authentication token for SonarQube'
     required: true
-  project-key:
     description: 'The key of the project in SonarQube'
     required: true
+  project-name:
+    description: 'The name of the project in SonarQube'
+    required: false
+  exclusions:
+    description: 'Files to exclude from the scan'
+    required: false
   github-token:
     description: 'GitHub Token to post comments'
     required: true
