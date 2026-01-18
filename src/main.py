@@ -35,7 +35,7 @@ def run_sonar_scanner(host, token, project_key, organization=None, project_name=
         sys.exit(result.returncode)
     print("SonarScanner finished successfully.")
 
-def get_sonar_issues(host, token, project_key):
+def get_sonar_issues(host, token, project_key, pr_number=None):
     """Fetches open issues from SonarQube."""
     url = f"{host}/api/issues/search"
     params = {
@@ -43,17 +43,41 @@ def get_sonar_issues(host, token, project_key):
         "resolved": "false",
         "ps": 500 # Page size
     }
+    if pr_number:
+        params["pullRequest"] = pr_number
+        
     response = requests.get(url, params=params, auth=(token, ""))
     response.raise_for_status()
     return response.json().get("issues", [])
 
-def get_coverage_metrics(host, token, project_key):
-    """Fetches global coverage metrics."""
+def get_sonar_hotspots(host, token, project_key, pr_number=None):
+    """Fetches security hotspots from SonarQube."""
+    url = f"{host}/api/hotspots/search"
+    params = {
+        "projectKey": project_key,
+        "ps": 500
+    }
+    if pr_number:
+        params["pullRequest"] = pr_number
+        
+    try:
+        response = requests.get(url, params=params, auth=(token, ""))
+        response.raise_for_status()
+        return response.json().get("hotspots", [])
+    except Exception as e:
+        print(f"Warning: Could not fetch security hotspots: {e}")
+        return []
+
+def get_coverage_metrics(host, token, project_key, pr_number=None):
+    """Fetches coverage metrics."""
     url = f"{host}/api/measures/component"
     params = {
         "component": project_key,
         "metricKeys": "coverage,new_coverage"
     }
+    if pr_number:
+        params["pullRequest"] = pr_number
+        
     metrics = {}
     try:
         response = requests.get(url, params=params, auth=(token, ""))
@@ -62,11 +86,11 @@ def get_coverage_metrics(host, token, project_key):
         for m in measures:
             metrics[m["metric"]] = m["value"]
     except Exception as e:
-        print(f"Warning: Could not fetch global coverage metrics: {e}")
+        print(f"Warning: Could not fetch coverage metrics: {e}")
         
     return metrics
 
-def get_file_coverage(host, token, project_key, changed_files):
+def get_file_coverage(host, token, project_key, changed_files, pr_number=None):
     """Fetches coverage for changed files."""
     url = f"{host}/api/measures/component_tree"
     params = {
@@ -75,13 +99,15 @@ def get_file_coverage(host, token, project_key, changed_files):
         "qualifiers": "FIL",
         "ps": 500
     }
+    if pr_number:
+        params["pullRequest"] = pr_number
+        
     file_coverage = {}
     try:
         response = requests.get(url, params=params, auth=(token, ""))
         response.raise_for_status()
         components = response.json().get("components", [])
         for comp in components:
-            # SonarQube returns 'path' usually matching git path
             path = comp.get('path')
             if path in changed_files:
                 for m in comp.get("measures", []):
@@ -92,10 +118,13 @@ def get_file_coverage(host, token, project_key, changed_files):
     
     return file_coverage
 
-def get_quality_gate_status(host, token, project_key):
-    """Fetches the quality gate status of the project."""
+def get_quality_gate_status(host, token, project_key, pr_number=None):
+    """Fetches the quality gate status."""
     url = f"{host}/api/qualitygates/project_status"
     params = {"projectKey": project_key}
+    if pr_number:
+        params["pullRequest"] = pr_number
+        
     try:
         response = requests.get(url, params=params, auth=(token, ""))
         response.raise_for_status()
@@ -105,24 +134,39 @@ def get_quality_gate_status(host, token, project_key):
         print(f"Warning: Could not fetch quality gate status: {e}")
         return "UNKNOWN"
 
-def format_comment(issues, changed_lines, metrics, file_coverage, qg_status, host, project_key):
-    """Formats the issues into a Markdown comment, filtering by changed lines."""
+def format_comment(issues, hotspots, changed_lines, metrics, file_coverage, qg_status, host, project_key):
+    """Formats the findings into a Markdown comment."""
     relevant_issues = []
-    
     for issue in issues:
         component = issue.get("component", "")
         file_path = component.split(":", 1)[-1] if ":" in component else component
         line = issue.get("line")
         
-        if file_path in changed_lines and line in changed_lines[file_path]:
+        # If we have line info, filter by changed lines. If not (e.g. file-level issue), include if file changed.
+        if file_path in changed_lines and (line is None or line in changed_lines[file_path]):
             issue_key = issue.get("key")
             link = f"{host}/project/issues?id={project_key}&issues={issue_key}&open={issue_key}"
-            
             relevant_issues.append({
                 "file": file_path,
-                "line": line,
+                "line": line or "N/A",
                 "message": issue.get("message"),
                 "severity": issue.get("severity"),
+                "link": link
+            })
+
+    relevant_hotspots = []
+    for hs in hotspots:
+        component = hs.get("component", "")
+        file_path = component.split(":", 1)[-1] if ":" in component else component
+        line = hs.get("line")
+        if file_path in changed_lines and (line is None or line in changed_lines[file_path]):
+            hs_key = hs.get("key")
+            link = f"{host}/security_hotspots?id={project_key}&hotspots={hs_key}"
+            relevant_hotspots.append({
+                "file": file_path,
+                "line": line or "N/A",
+                "message": hs.get("message"),
+                "status": hs.get("status"),
                 "link": link
             })
             
@@ -130,7 +174,6 @@ def format_comment(issues, changed_lines, metrics, file_coverage, qg_status, hos
     comment = "<!-- sonarppr-scan -->\n"
     comment += "### 🔍 SonarQube Analysis (New Code)\n\n"
     
-    # Health / Quality Gate
     status_icons = {
         "OK": "✅ Passed",
         "ERROR": "❌ Failed",
@@ -140,7 +183,6 @@ def format_comment(issues, changed_lines, metrics, file_coverage, qg_status, hos
     health_icon = status_icons.get(qg_status, qg_status)
     comment += f"**PR Health**: {health_icon}\n\n"
     
-    # Global Coverage
     if metrics:
         cov = metrics.get('coverage', 'N/A')
         new_cov = metrics.get('new_coverage', 'N/A')
@@ -149,7 +191,6 @@ def format_comment(issues, changed_lines, metrics, file_coverage, qg_status, hos
              comment += f" (New Code: {new_cov}%)"
         comment += "\n\n"
 
-    # File Coverage Table
     if file_coverage:
         comment += "#### 📄 File Coverage\n"
         comment += "| File | Coverage |\n"
@@ -159,29 +200,29 @@ def format_comment(issues, changed_lines, metrics, file_coverage, qg_status, hos
         comment += "\n"
 
     # Issues Section 
-    if not relevant_issues:
+    if not relevant_issues and not relevant_hotspots:
         comment += "✅ No issues found in the new code."
     else:
-        comment += "#### 🐛 Issues\n"
-        comment += "| Severity | File | Line | Message |\n"
-        comment += "|----------|------|------|---------|\n"
-        
-        icons = {
-            "BLOCKER": "🚫",
-            "CRITICAL": "🔴",
-            "MAJOR": "jg",
-            "MINOR": "🟢",
-            "INFO": "ℹ️"
-        }
-        
-        for i in relevant_issues:
-            icon = icons.get(i['severity'], "")
-            message_link = f"[{i['message']}]({i['link']})"
-            comment += f"| {icon} {i['severity']} | `{i['file']}` | {i['line']} | {message_link} |\n"
+        if relevant_issues:
+            comment += "#### 🐛 Issues\n"
+            comment += "| Severity | File | Line | Message |\n"
+            comment += "|----------|------|------|---------|\n"
+            icons = {"BLOCKER": "🚫", "CRITICAL": "🔴", "MAJOR": "🟠", "MINOR": "🟢", "INFO": "ℹ️"}
+            for i in relevant_issues:
+                icon = icons.get(i['severity'], "️")
+                comment += f"| {icon} {i['severity']} | `{i['file']}` | {i['line']} | [{i['message']}]({i['link']}) |\n"
+            comment += "\n"
+
+        if relevant_hotspots:
+            comment += "#### 🛡️ Security Hotspots\n"
+            comment += "| Status | File | Line | Message |\n"
+            comment += "|--------|------|------|---------|\n"
+            for hs in relevant_hotspots:
+                comment += f"| 🛡️ {hs['status']} | `{hs['file']}` | {hs['line']} | [{hs['message']}]({hs['link']}) |\n"
+            comment += "\n"
         
     comment += "\n---\n"
     comment += "_Reported by sonarppr-scan_"
-    
     return comment
 
 def main():
@@ -195,39 +236,15 @@ def main():
     binaries = os.getenv("INPUT_BINARIES")
     github_token = os.getenv("INPUT_GITHUB-TOKEN")
     
-    # GitHub Event Info
-    event_path = os.getenv("GITHUB_EVENT_PATH")
-    repo = os.getenv("GITHUB_REPOSITORY") # owner/repo
-    
-    # We need the PR number. In a workflow `on: pull_request`, the REF is usually refs/pull/:pr/merge
-    # But it's safer to get it from the event payload if available, or GITHUB_REF
-    # For simplicity, let's assume we can parse GITHUB_REF or use an input. 
-    # Actually, simpler: The Action runs in the context of the PR.
-    
-    # Verify environment
-    missing = []
-    if not sonar_host: missing.append("sonar-host-url")
-    if not sonar_token: missing.append("sonar-token")
-    if not project_key: missing.append("project-key")
-    if not github_token: missing.append("github-token")
-    if not repo: missing.append("GITHUB_REPOSITORY")
-    
-    if missing:
-        print(f"Missing required inputs: {', '.join(missing)}")
-        sys.exit(1)
-
-    # 1. Get PR changes
-    # We need PR number.
-    # In GitHub Actions, GITHUB_REF for PR is refs/pull/<pr_number>/merge
+    repo = os.getenv("GITHUB_REPOSITORY")
     ref = os.getenv("GITHUB_REF", "")
     try:
         pr_number = int(ref.split("/")[2])
     except (IndexError, ValueError):
         print("Could not determine PR number from GITHUB_REF. Is this a PR event?")
         sys.exit(1)
-        
-    print(f"Analyzing PR #{pr_number} for {repo}")
-    
+
+    # 1. Get PR changes
     try:
         diff_text = get_pr_diff(repo, pr_number, github_token)
         changed_lines = parse_changed_lines(diff_text)
@@ -241,15 +258,15 @@ def main():
     
     # 3. Process Results
     try:
-        issues = get_sonar_issues(sonar_host, sonar_token, project_key)
-        metrics = get_coverage_metrics(sonar_host, sonar_token, project_key)
-        qg_status = get_quality_gate_status(sonar_host, sonar_token, project_key)
+        issues = get_sonar_issues(sonar_host, sonar_token, project_key, pr_number)
+        hotspots = get_sonar_hotspots(sonar_host, sonar_token, project_key, pr_number)
+        metrics = get_coverage_metrics(sonar_host, sonar_token, project_key, pr_number)
+        qg_status = get_quality_gate_status(sonar_host, sonar_token, project_key, pr_number)
         
-        # Get list of file paths
         changed_file_paths = list(changed_lines.keys())
-        file_coverage = get_file_coverage(sonar_host, sonar_token, project_key, changed_file_paths)
+        file_coverage = get_file_coverage(sonar_host, sonar_token, project_key, changed_file_paths, pr_number)
         
-        comment_body = format_comment(issues, changed_lines, metrics, file_coverage, qg_status, sonar_host, project_key)
+        comment_body = format_comment(issues, hotspots, changed_lines, metrics, file_coverage, qg_status, sonar_host, project_key)
         
         if comment_body:
             print("Posting comment to PR...")
@@ -257,9 +274,6 @@ def main():
             gh_repo = g.get_repo(repo)
             pr = gh_repo.get_pull(pr_number)
             pr.create_issue_comment(comment_body)
-        else:
-            print("No significant findings to report.")
-            
     except Exception as e:
         print(f"Error processing results: {e}")
         sys.exit(1)
