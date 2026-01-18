@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.10-slim-bullseye
 
 # Install OpenJDK 17 (Required for SonarScanner)
 RUN apt-get update && \
