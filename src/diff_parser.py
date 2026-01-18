@@ -33,7 +33,7 @@ def parse_changed_lines(diff_content):
         
         for hunk in patched_file:
             # hunk.target_lines contains the lines in the new version of the file
-            for line in hunk.target_lines:
+            for line in hunk.target_lines():
                 if line.is_added:
                     lines.add(line.target_line_no)
         
