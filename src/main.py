@@ -17,7 +17,7 @@ def run_sonar_scanner(host, token, project_key, organization=None, project_name=
         f"-Dsonar.host.url={host}",
         f"-Dsonar.token={token}",
         f"-Dsonar.projectKey={project_key}",
-        "-Dsonar.scm.provider=test" # Disable SCM sensor to avoid issues in some docker envs if .git is incomplete
+        "-Dsonar.scm.disabled=true" # Disable SCM sensor to avoid issues in some docker envs if .git is incomplete
     ]
     if organization:
         cmd.append(f"-Dsonar.organization={organization}")
