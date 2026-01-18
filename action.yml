@@ -1,0 +1,21 @@
+name: 'SonarQube Community PR Scan'
+description: 'Runs SonarScanner and posts a comment with issues found only in new code (for Community Edition).'
+inputs:
+  sonar-host-url:
+    description: 'The URL of your SonarQube server'
+    required: true
+  sonar-token:
+    description: 'Authentication token for SonarQube'
+    required: true
+  project-key:
+    description: 'The key of the project in SonarQube'
+    required: true
+  github-token:
+    description: 'GitHub Token to post comments'
+    required: true
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+branding:
+  icon: 'check-circle'
+  color: 'blue'
